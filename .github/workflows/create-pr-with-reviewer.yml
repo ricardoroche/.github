@@ -1,0 +1,74 @@
+name: Create PR with Reviewer
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: 'Branch to create PR from'
+        required: true
+        type: string
+      base:
+        description: 'Base branch to merge into'
+        required: false
+        default: 'main'
+        type: string
+      title:
+        description: 'PR title'
+        required: true
+        type: string
+      body:
+        description: 'PR body'
+        required: false
+        default: ''
+        type: string
+      reviewer:
+        description: 'GitHub username to add as reviewer'
+        required: false
+        default: 'ricardoroche'
+        type: string
+      draft:
+        description: 'Create as draft PR'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      BOT_TOKEN:
+        description: 'PAT for bot identity (optional, falls back to GITHUB_TOKEN)'
+        required: false
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create PR
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Create the PR
+          PR_URL=$(gh pr create \
+            --repo "$REPO" \
+            --head "${{ inputs.branch }}" \
+            --base "${{ inputs.base }}" \
+            --title "${{ inputs.title }}" \
+            --body "${{ inputs.body }}" \
+            ${{ inputs.draft && '--draft' || '' }} \
+            2>&1)
+
+          echo "PR created: $PR_URL"
+
+          # Extract PR number from URL
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Add reviewer
+        if: inputs.reviewer != ''
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-reviewer "${{ inputs.reviewer }}"
+          echo "Added reviewer: ${{ inputs.reviewer }}"
