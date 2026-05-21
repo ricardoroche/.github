@@ -1,0 +1,175 @@
+name: PR Discord Notify
+
+on:
+  workflow_call:
+    secrets:
+      DISCORD_PR_WEBHOOK_URL:
+        required: true
+      DISCORD_BOT_TOKEN:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR Opened → Discord
+        if: github.event.action == 'opened'
+        id: discord_open
+        run: |
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_BODY="${{ github.event.pull_request.body }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_AUTHOR_AVATAR="${{ github.event.pull_request.user.avatar_url }}"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          REPO_NAME="${{ github.repository }}"
+
+          # Truncate body to ~500 chars for Discord
+          TRUNCATED_BODY="${PR_BODY:0:500}"
+          if [ "${#PR_BODY}" -gt 500 ]; then
+            TRUNCATED_BODY="${TRUNCATED_BODY}..."
+          fi
+
+          # Escape for JSON
+          PR_TITLE_ESCAPED=$(echo "$PR_TITLE" | jq -Rs '.[:-1]')
+          TRUNCATED_BODY_ESCAPED=$(echo "$TRUNCATED_BODY" | jq -Rs '.[:-1]')
+          HEAD_BRANCH_ESCAPED=$(echo "$HEAD_BRANCH" | jq -Rs '.[:-1]')
+          BASE_BRANCH_ESCAPED=$(echo "$BASE_BRANCH" | jq -Rs '.[:-1]')
+
+          JSON_PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": ${PR_TITLE_ESCAPED},
+              "url": "${PR_URL}",
+              "description": ${TRUNCATED_BODY_ESCAPED},
+              "color": 3066993,
+              "author": {
+                "name": "${PR_AUTHOR}",
+                "icon_url": "${PR_AUTHOR_AVATAR}"
+              },
+              "footer": {
+                "text": "${REPO_NAME} • ${HEAD_BRANCH_ESCAPED} → ${BASE_BRANCH_ESCAPED}"
+              },
+              "timestamp": "${{ github.event.pull_request.created_at }}"
+            }]
+          }
+          EOF
+          )
+
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD" \
+            "${{ secrets.DISCORD_PR_WEBHOOK_URL }}")
+
+          MESSAGE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          echo "message_id=$MESSAGE_ID" >> "$GITHUB_OUTPUT"
+          echo "Posted Discord message: $MESSAGE_ID"
+
+      - name: Save Discord message ID to PR comment
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const messageId = '${{ steps.discord_open.outputs.message_id }}';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `<!-- discord-pr-notify -->\n**Discord notification:** message \`${messageId}\``
+            });
+
+      - name: PR Closed → Update Discord
+        if: github.event.action == 'closed'
+        id: discord_close
+        run: |
+          # Fetch PR comments to find the Discord message ID
+          COMMENTS=$(curl -s \
+            -H "Authorization: token ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments")
+
+          MESSAGE_ID=$(echo "$COMMENTS" | jq -r '.[] | select(.body | contains("<!-- discord-pr-notify -->")) | .body | capture("message `(?<id>[0-9]+)`").id')
+
+          if [ -z "$MESSAGE_ID" ] || [ "$MESSAGE_ID" = "null" ]; then
+            echo "No Discord message ID found in PR comments"
+            exit 0
+          fi
+
+          echo "message_id=$MESSAGE_ID" >> "$GITHUB_OUTPUT"
+
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_AUTHOR_AVATAR="${{ github.event.pull_request.user.avatar_url }}"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          REPO_NAME="${{ github.repository }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+
+          if [ "$MERGED" = "true" ]; then
+            COLOR=10181046  # Purple
+            STATUS="Merged"
+            EMOJI="🟣"
+          else
+            COLOR=15158332  # Red
+            STATUS="Closed"
+            EMOJI="🔴"
+          fi
+
+          PR_TITLE_ESCAPED=$(echo "$PR_TITLE" | jq -Rs '.[:-1]')
+          HEAD_BRANCH_ESCAPED=$(echo "$HEAD_BRANCH" | jq -Rs '.[:-1]')
+          BASE_BRANCH_ESCAPED=$(echo "$BASE_BRANCH" | jq -Rs '.[:-1]')
+
+          JSON_PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "[${STATUS}] ${PR_TITLE_ESCAPED}",
+              "url": "${PR_URL}",
+              "description": "This pull request has been ${STATUS,,}.",
+              "color": ${COLOR},
+              "author": {
+                "name": "${PR_AUTHOR}",
+                "icon_url": "${PR_AUTHOR_AVATAR}"
+              },
+              "footer": {
+                "text": "${REPO_NAME} • ${HEAD_BRANCH_ESCAPED} → ${BASE_BRANCH_ESCAPED}"
+              },
+              "timestamp": "${{ github.event.pull_request.closed_at }}"
+            }]
+          }
+          EOF
+          )
+
+          # Extract webhook ID and token from URL
+          WEBHOOK_URL="${{ secrets.DISCORD_PR_WEBHOOK_URL }}"
+          WEBHOOK_ID=$(echo "$WEBHOOK_URL" | sed 's/.*webhooks\/\([0-9]*\).*/\1/')
+          WEBHOOK_TOKEN=$(echo "$WEBHOOK_URL" | sed 's/.*webhooks\/[0-9]*\/\(.*\)/\1/')
+
+          curl -s -X PATCH \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD" \
+            "https://discord.com/api/v10/webhooks/${WEBHOOK_ID}/${WEBHOOK_TOKEN}/messages/${MESSAGE_ID}"
+
+          echo "Updated Discord message: $MESSAGE_ID"
+
+      - name: Add reaction emoji
+        if: github.event.action == 'closed' && steps.discord_close.outputs.message_id != ''
+        run: |
+          MESSAGE_ID="${{ steps.discord_close.outputs.message_id }}"
+          CHANNEL_ID="1507088088805933086"
+          MERGED="${{ github.event.pull_request.merged }}"
+
+          if [ "$MERGED" = "true" ]; then
+            EMOJI="🟣"
+          else
+            EMOJI="🔴"
+          fi
+
+          # URL-encode emoji for Discord API
+          ENCODED_EMOJI=$(printf '%s' "$EMOJI" | jq -sRr '@uri')
+
+          curl -s -X PUT \
+            -H "Authorization: Bot ${{ secrets.DISCORD_BOT_TOKEN }}" \
+            "https://discord.com/api/v10/channels/${CHANNEL_ID}/messages/${MESSAGE_ID}/reactions/${ENCODED_EMOJI}/@me"
+
+          echo "Added reaction: $EMOJI"
