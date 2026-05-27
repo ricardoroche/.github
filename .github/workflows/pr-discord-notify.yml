@@ -19,8 +19,8 @@ jobs:
           PR_URL="${{ github.event.pull_request.html_url }}"
           PR_TITLE='${{ github.event.pull_request.title }}'
           PR_BODY='${{ github.event.pull_request.body }}'
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-          PR_AUTHOR_AVATAR="${{ github.event.pull_request.user.avatar_url }}"
+          PR_AUTHOR=*** github.event.pull_request.user.login }}"
+          PR_AUTHOR_AVATAR=*** github.event.pull_request.user.avatar_url }}"
           HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
           BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
           REPO_NAME="${{ github.repository }}"
@@ -72,11 +72,14 @@ jobs:
         with:
           script: |
             const messageId = '${{ steps.discord_open.outputs.message_id }}';
+            const guildId = '1491097061255418017';
+            const channelId = '1507088088805933086';
+            const discordUrl = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `<!-- discord-pr-notify -->\n**Discord notification:** message \`${messageId}\``
+              body: `<!-- discord-pr-notify -->\n**Discord notification:** [Discord message](${discordUrl})`
             });
 
       - name: PR Closed → Update Discord
@@ -88,7 +91,7 @@ jobs:
             -H "Authorization: token ${{ github.token }}" \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments")
 
-          MESSAGE_ID=$(echo "$COMMENTS" | jq -r '.[] | select(.body | contains("<!-- discord-pr-notify -->")) | .body | capture("message `(?<id>[0-9]+)`").id')
+          MESSAGE_ID=$(echo "$COMMENTS" | jq -r '.[] | select(.body | contains("<!-- discord-pr-notify -->")) | .body | capture("discord\.com/channels/[0-9]+/[0-9]+/(?<id>[0-9]+)").id')
 
           if [ -z "$MESSAGE_ID" ] || [ "$MESSAGE_ID" = "null" ]; then
             echo "No Discord message ID found in PR comments"
@@ -99,8 +102,8 @@ jobs:
 
           PR_URL="${{ github.event.pull_request.html_url }}"
           PR_TITLE='${{ github.event.pull_request.title }}'
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-          PR_AUTHOR_AVATAR="${{ github.event.pull_request.user.avatar_url }}"
+          PR_AUTHOR=*** github.event.pull_request.user.login }}"
+          PR_AUTHOR_AVATAR=*** github.event.pull_request.user.avatar_url }}"
           HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
           BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
           REPO_NAME="${{ github.repository }}"
@@ -143,7 +146,7 @@ jobs:
           # Extract webhook ID and token from URL
           WEBHOOK_URL="${{ secrets.DISCORD_PR_WEBHOOK_URL }}"
           WEBHOOK_ID=$(echo "$WEBHOOK_URL" | sed 's/.*webhooks\/\([0-9]*\).*/\1/')
-          WEBHOOK_TOKEN=$(echo "$WEBHOOK_URL" | sed 's/.*webhooks\/[0-9]*\/\(.*\)/\1/')
+          WEBHOOK_TOKEN=*** "$WEBHOOK_URL" | sed 's/.*webhooks\/[0-9]*\/\(.*\)/\1/')
 
           curl -s -X PATCH \
             -H "Content-Type: application/json" \
